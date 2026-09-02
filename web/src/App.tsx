@@ -6,6 +6,17 @@ import { downloadBlob, exportStl, filterBuildingsInBBox } from './export/stl';
 import type { BBox, BuildingFeature, Origin } from './types';
 import './App.css';
 
+function clampBBoxAround(center: Origin, bbox: BBox, maxHalfDeg = 0.0035): BBox {
+  const halfLng = Math.min(Math.max((bbox.east - bbox.west) / 2, 0.0008), maxHalfDeg);
+  const halfLat = Math.min(Math.max((bbox.north - bbox.south) / 2, 0.0008), maxHalfDeg);
+  return {
+    west: center.lng - halfLng,
+    east: center.lng + halfLng,
+    south: center.lat - halfLat,
+    north: center.lat + halfLat,
+  };
+}
+
 const MAX_AREA_KM2 = 1.5;
 const DEFAULT_ORIGIN: Origin = { lng: 21.0122, lat: 52.2297 }; // Warszawa
 
@@ -30,7 +41,8 @@ export default function App() {
     [buildings, selection],
   );
 
-  const loadForBBox = useCallback(async (bbox: BBox) => {
+  const loadForBBox = useCallback(async (rawBBox: BBox, center?: Origin) => {
+    const bbox = clampBBoxAround(center ?? bboxCenter(rawBBox), rawBBox);
     const area = bboxAreaKm2(bbox);
     if (area > MAX_AREA_KM2 * 4) {
       setStatus('Przybliż mapę, aby wczytać budynki (zbyt duży obszar)');
@@ -64,7 +76,7 @@ export default function App() {
   }, []);
 
   const onMoveEnd = useCallback(
-    (_center: Origin, zoom: number, viewBBox: BBox) => {
+    (center: Origin, zoom: number, viewBBox: BBox) => {
       viewBBoxRef.current = viewBBox;
       if (zoom < 14.5) {
         setStatus('Przybliż mapę (zoom ≥ 15), aby wczytać budynki 3D');
@@ -72,18 +84,26 @@ export default function App() {
       }
       if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
       fetchTimer.current = window.setTimeout(() => {
-        void loadForBBox(viewBBox);
+        void loadForBBox(viewBBox, center);
       }, 550);
     },
     [loadForBBox],
   );
 
   useEffect(() => {
+    // Initial OSM fetch around default center (do not wait only for map moveend).
+    const pad = 0.004;
+    void loadForBBox({
+      west: DEFAULT_ORIGIN.lng - pad,
+      east: DEFAULT_ORIGIN.lng + pad,
+      south: DEFAULT_ORIGIN.lat - pad,
+      north: DEFAULT_ORIGIN.lat + pad,
+    });
     return () => {
       abortRef.current?.abort();
       if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
     };
-  }, []);
+  }, [loadForBBox]);
 
   const startSelect = () => {
     setSelecting(true);
@@ -156,7 +176,10 @@ export default function App() {
           <button
             type="button"
             className="btn ghost"
-            onClick={() => viewBBoxRef.current && void loadForBBox(viewBBoxRef.current)}
+            onClick={() =>
+              viewBBoxRef.current &&
+              void loadForBBox(viewBBoxRef.current, origin)
+            }
             disabled={loading}
           >
             {loading ? 'Wczytywanie…' : 'Odśwież OSM'}

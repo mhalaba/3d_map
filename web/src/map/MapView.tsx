@@ -5,6 +5,7 @@ import {
   ScaleControl,
   type MapMouseEvent,
 } from 'maplibre-gl';
+import './setupMapLibre';
 import { createBuildingsLayer, type BuildingsLayerApi } from './buildingsLayer';
 import type { BBox, BuildingFeature, Origin } from '../types';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -41,14 +42,21 @@ export function MapView({
   const layerRef = useRef<(ReturnType<typeof createBuildingsLayer> & BuildingsLayerApi) | null>(
     null,
   );
+  const mapReadyRef = useRef(false);
   const dragStartRef = useRef<[number, number] | null>(null);
   const selectingRef = useRef(selecting);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onMoveEndRef = useRef(onMoveEnd);
+  const buildingsRef = useRef(buildings);
+  const originRef = useRef(origin);
+  const selectionRef = useRef(selection);
 
   selectingRef.current = selecting;
   onSelectionChangeRef.current = onSelectionChange;
   onMoveEndRef.current = onMoveEnd;
+  buildingsRef.current = buildings;
+  originRef.current = origin;
+  selectionRef.current = selection;
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -56,7 +64,7 @@ export function MapView({
     const map = new MapLibreMap({
       container: containerRef.current,
       style: 'https://tiles.openfreemap.org/styles/liberty',
-      center: [origin.lng, origin.lat],
+      center: [originRef.current.lng, originRef.current.lat],
       zoom: 16,
       pitch: 60,
       bearing: -20,
@@ -69,14 +77,22 @@ export function MapView({
     const layer = createBuildingsLayer();
     layerRef.current = layer;
 
-    map.on('load', () => {
-      map.addLayer(layer);
-      layer.setBuildings(buildings, origin);
-      if (selection) layer.setSelectionBBox(selection);
-
+    let boot = 0;
+    const syncReady = () => {
+      if (mapReadyRef.current) return;
+      if (!map.isStyleLoaded()) return;
+      mapReadyRef.current = true;
+      window.clearInterval(boot);
+      if (!map.getLayer(layer.id)) map.addLayer(layer);
+      layer.setBuildings(buildingsRef.current, originRef.current);
+      if (selectionRef.current) layer.setSelectionBBox(selectionRef.current);
       const c = map.getCenter();
       onMoveEndRef.current({ lng: c.lng, lat: c.lat }, map.getZoom(), mapBoundsToBBox(map));
-    });
+    };
+
+    map.on('load', syncReady);
+    map.on('error', (e) => console.error('MapLibre error', e.error ?? e));
+    boot = window.setInterval(syncReady, 250);
 
     map.on('moveend', () => {
       const c = map.getCenter();
@@ -117,18 +133,21 @@ export function MapView({
     mapRef.current = map;
 
     return () => {
+      window.clearInterval(boot);
+      mapReadyRef.current = false;
       map.remove();
       mapRef.current = null;
       layerRef.current = null;
     };
-    // mount once
   }, []);
 
   useEffect(() => {
+    if (!mapReadyRef.current) return;
     layerRef.current?.setBuildings(buildings, origin);
   }, [buildings, origin]);
 
   useEffect(() => {
+    if (!mapReadyRef.current) return;
     layerRef.current?.setSelectionBBox(selection);
   }, [selection]);
 

@@ -16,16 +16,17 @@ export type BuildingsLayerApi = {
 };
 
 export function createBuildingsLayer(id = 'buildings-3d'): CustomLayerInterface & BuildingsLayerApi {
-  let map: MapLibreMap;
-  let renderer: THREE.WebGLRenderer;
-  let scene: THREE.Scene;
-  let camera: THREE.Camera;
-  let root: THREE.Group;
+  let map: MapLibreMap | undefined;
+  let renderer: THREE.WebGLRenderer | undefined;
+  let scene: THREE.Scene | undefined;
+  let camera: THREE.Camera | undefined;
+  let root: THREE.Group | undefined;
   let selectionHelper: THREE.LineSegments | null = null;
   let modelOrigin: Origin = { lng: 21.0122, lat: 52.2297 };
   let modelTransform = { translateX: 0, translateY: 0, translateZ: 0, scale: 1 };
   let selectedIds = new Set<string>();
   let buildings: BuildingFeature[] = [];
+  let ready = false;
 
   function updateTransform(origin: Origin) {
     modelOrigin = origin;
@@ -48,6 +49,8 @@ export function createBuildingsLayer(id = 'buildings-3d'): CustomLayerInterface 
   }
 
   function rebuildMeshes() {
+    if (!ready || !root) return;
+
     while (root.children.length) {
       const child = root.children.pop()!;
       disposeObject(child);
@@ -64,6 +67,7 @@ export function createBuildingsLayer(id = 'buildings-3d'): CustomLayerInterface 
   }
 
   function applySelectionColors() {
+    if (!root) return;
     root.traverse((obj) => {
       if (obj instanceof THREE.Mesh && obj.userData.buildingId) {
         const selected = selectedIds.has(obj.userData.buildingId as string);
@@ -97,9 +101,29 @@ export function createBuildingsLayer(id = 'buildings-3d'): CustomLayerInterface 
       });
       renderer.autoClear = false;
       updateTransform(modelOrigin);
+      ready = true;
+      rebuildMeshes();
+    },
+
+    onRemove() {
+      ready = false;
+      if (root) {
+        while (root.children.length) {
+          const child = root.children.pop()!;
+          disposeObject(child);
+        }
+      }
+      renderer?.dispose();
+      map = undefined;
+      root = undefined;
+      scene = undefined;
+      camera = undefined;
+      renderer = undefined;
+      selectionHelper = null;
     },
 
     render(_gl, options: CustomRenderMethodInput) {
+      if (!ready || !renderer || !scene || !camera || !map) return;
       const matrix =
         options.modelViewProjectionMatrix ?? options.defaultProjectionData?.mainMatrix;
       if (!matrix) return;
@@ -118,7 +142,7 @@ export function createBuildingsLayer(id = 'buildings-3d'): CustomLayerInterface 
       camera.projectionMatrix = m.multiply(l);
       renderer.resetState();
       renderer.render(scene, camera);
-      map.triggerRepaint();
+      // Do not call map.triggerRepaint() every frame — it can starve base map tiles.
     },
 
     setBuildings(next, origin) {
@@ -130,7 +154,7 @@ export function createBuildingsLayer(id = 'buildings-3d'): CustomLayerInterface 
     setSelectionBBox(bbox) {
       if (selectionHelper) {
         disposeObject(selectionHelper);
-        root.remove(selectionHelper);
+        root?.remove(selectionHelper);
         selectionHelper = null;
       }
 
@@ -157,7 +181,7 @@ export function createBuildingsLayer(id = 'buildings-3d'): CustomLayerInterface 
         geo,
         new THREE.LineBasicMaterial({ color: '#e07a3d' }),
       );
-      root.add(selectionHelper);
+      root?.add(selectionHelper);
 
       selectedIds = new Set(
         buildings.filter((bldg) => ringIntersectsBBox(bldg.outer, bbox)).map((bldg) => bldg.id),
