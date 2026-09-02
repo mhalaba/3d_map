@@ -1,0 +1,21 @@
+# Dodatkowy serwer MapMold — włącz / wyłącz w swoim panelu Docker:
+#   docker compose --profile mapmold up -d mapmold
+#   docker compose --profile mapmold stop mapmold
+#   docker compose --profile mapmold down
+services:
+  mapmold:
+    profiles: ["mapmold"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mapmold:local
+    container_name: mapmold
+    restart: unless-stopped
+    ports:
+      - "${MAPMOLD_PORT:-3080}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

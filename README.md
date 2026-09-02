@@ -13,4 +13,5 @@ npm run dev
 ## Dokumentacja
 
 - [Plan aplikacji](./PLAN.md)
+- [Deploy — włącz/wyłącz serwer w panelu](./DEPLOY.md)
 - [README frontendu](./web/README.md)

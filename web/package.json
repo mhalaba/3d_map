@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "smoke": "tsx scripts/smoke-export.ts"
+    "smoke": "tsx scripts/smoke-export.ts",
+    "start": "node app.js"
   },
   "dependencies": {
     "@turf/turf": "^7.4.0",
