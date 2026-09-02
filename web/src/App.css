@@ -1,0 +1,274 @@
+:root {
+  --bg-deep: #0f1c24;
+  --ink: #132027;
+  --muted: #3d525c;
+  --sand: #f2ebe0;
+  --panel: rgba(247, 242, 234, 0.92);
+  --accent: #c45c26;
+  --accent-ink: #fff8f2;
+  --line: rgba(19, 32, 39, 0.14);
+  --ok: #1f6f5b;
+  --font-display: 'Bricolage Grotesque', Georgia, serif;
+  --font-body: 'Figtree', sans-serif;
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-deep);
+}
+
+.app {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.map-root {
+  position: absolute;
+  inset: 0;
+}
+
+.atmosphere {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 70% at 15% 0%, rgba(242, 235, 224, 0.55), transparent 55%),
+    linear-gradient(180deg, rgba(15, 28, 36, 0.18), transparent 42%, rgba(15, 28, 36, 0.35));
+  z-index: 1;
+}
+
+.hero {
+  position: absolute;
+  z-index: 2;
+  top: clamp(1.25rem, 4vh, 2.5rem);
+  left: clamp(1.25rem, 4vw, 2.75rem);
+  max-width: min(34rem, calc(100vw - 2.5rem));
+  animation: rise 700ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.brand {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: clamp(2.8rem, 7vw, 4.6rem);
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 0.9;
+  color: var(--sand);
+  text-shadow: 0 10px 40px rgba(15, 28, 36, 0.45);
+}
+
+.hero h1 {
+  margin: 0.85rem 0 0.55rem;
+  font-family: var(--font-display);
+  font-size: clamp(1.15rem, 2.4vw, 1.55rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--sand);
+  max-width: 22ch;
+  text-shadow: 0 6px 24px rgba(15, 28, 36, 0.4);
+}
+
+.lede {
+  margin: 0;
+  max-width: 34ch;
+  color: rgba(242, 235, 224, 0.88);
+  font-size: 1rem;
+  line-height: 1.45;
+}
+
+.cta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 1.25rem;
+}
+
+.btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 0.72rem 1.2rem;
+  font-family: var(--font-body);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+.btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-ink);
+  box-shadow: 0 10px 28px rgba(196, 92, 38, 0.35);
+}
+
+.btn.ghost {
+  background: rgba(242, 235, 224, 0.16);
+  color: var(--sand);
+  border-color: rgba(242, 235, 224, 0.35);
+  backdrop-filter: blur(8px);
+}
+
+.btn.wide {
+  width: 100%;
+  margin-top: 0.35rem;
+}
+
+.hud {
+  position: absolute;
+  z-index: 2;
+  left: clamp(1.25rem, 4vw, 2.75rem);
+  bottom: 2.6rem;
+  max-width: min(28rem, calc(100vw - 2.5rem));
+  padding: 0.7rem 0.9rem;
+  border-radius: 0.75rem;
+  background: rgba(15, 28, 36, 0.55);
+  color: var(--sand);
+  backdrop-filter: blur(10px);
+  font-size: 0.86rem;
+  line-height: 1.35;
+  animation: fade 500ms ease both;
+}
+
+.hud-error {
+  margin-top: 0.35rem;
+  color: #ffb4a2;
+}
+
+.export-panel {
+  position: absolute;
+  z-index: 2;
+  top: clamp(1.25rem, 4vh, 2.5rem);
+  right: clamp(1rem, 3vw, 2rem);
+  width: min(20.5rem, calc(100vw - 2rem));
+  padding: 1.1rem 1.15rem 1.2rem;
+  border-radius: 1rem;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 18px 50px rgba(15, 28, 36, 0.28);
+  animation: slide 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.export-panel h2 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  letter-spacing: -0.02em;
+}
+
+.export-panel > p {
+  margin: 0.4rem 0 0.9rem;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.field {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.field input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 0.55rem;
+  padding: 0.55rem 0.65rem;
+  font: inherit;
+  color: var(--ink);
+  background: #fff;
+}
+
+.field small {
+  color: #6a7b84;
+}
+
+.attrib {
+  position: absolute;
+  z-index: 2;
+  right: 0.75rem;
+  bottom: 0.45rem;
+  margin: 0;
+  max-width: 55vw;
+  text-align: right;
+  font-size: 0.68rem;
+  color: rgba(242, 235, 224, 0.72);
+  text-shadow: 0 1px 8px rgba(15, 28, 36, 0.6);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (max-width: 720px) {
+  .export-panel {
+    top: auto;
+    bottom: 4.5rem;
+    right: 0.75rem;
+    left: 0.75rem;
+    width: auto;
+  }
+
+  .hero h1 {
+    max-width: 18ch;
+  }
+
+  .attrib {
+    max-width: 90vw;
+    left: 0.75rem;
+    right: 0.75rem;
+    text-align: left;
+  }
+}

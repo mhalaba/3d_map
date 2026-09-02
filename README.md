@@ -1,7 +1,16 @@
-# 3d_map
+# 3d_map / MapMold
 
-Aplikacja webowa: mapa OpenStreetMap z obiektami 3D (budynki LoD1) oraz eksport zaznaczonego fragmentu do STL.
+Aplikacja webowa: mapa OpenStreetMap z budynkami 3D **LoD2** oraz eksport zaznaczonego fragmentu do STL.
+
+## Szybki start
+
+```bash
+cd web
+npm install
+npm run dev
+```
 
 ## Dokumentacja
 
-- [Plan aplikacji](./PLAN.md) — cel, architektura, stack, pipeline OSM→mesh→STL, etapy MVP.
+- [Plan aplikacji](./PLAN.md)
+- [README frontendu](./web/README.md)

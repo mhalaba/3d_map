@@ -9,11 +9,11 @@ Aplikacja webowa do przeglądania mapy OpenStreetMap z budynkami i obiektami 3D,
 Użytkownik:
 
 1. Otwiera mapę (OSM) w widoku 3D.
-2. Widzi budynki i wybrane obiekty jako modele 3D (głównie LoD1: obrys + wysokość).
+2. Widzi budynki i wybrane obiekty jako modele 3D (**LoD2**: ściany + kształty dachów z tagów OSM).
 3. Zaznacza prostokąt / wielokąt na mapie.
 4. Eksportuje zaznaczony fragment do pliku `.stl`.
 
-**MVP:** budynki LoD1 + teren płaski + eksport STL zaznaczonego bboxa.
+**MVP:** budynki LoD2 + teren płaski + eksport STL zaznaczonego bboxa.
 
 ---
 
@@ -24,8 +24,9 @@ Użytkownik:
 - Mapa bazowa OSM (raster lub wektor)
 - Widok 3D z kamerą orbit / tilt / zoom
 - Budynki z OSM: footprint + `height` / `building:levels`
+- **Dachy LoD2** (`roof:shape`, `roof:height`, `roof:orientation`, …)
 - Zaznaczenie prostokątem (bbox)
-- Generowanie siatki 3D (extrude) i eksport STL
+- Generowanie siatki 3D (extrude + dach) i eksport STL
 - Podgląd zaznaczenia przed eksportem
 - Działa w przeglądarce (bez konta)
 
@@ -39,11 +40,11 @@ Użytkownik:
 
 ### v2
 
-- Dachy LoD2 (`roof:shape`, `roof:height`)
 - Relief terenu (DEM, np. Mapzen/OpenTopography / lokalny tile)
 - Cache / tile’owanie geometrii
 - Eksport GLTF/OBJ obok STL
 - Limit obszaru + kolejka eksportu po stronie serwera dla dużych bboxów
+- Dokładniejsze dachy (mansard/gambrel jako osobne geometrie, dormers)
 
 ---
 
