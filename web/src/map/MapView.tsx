@@ -3,12 +3,41 @@ import {
   Map as MapLibreMap,
   NavigationControl,
   ScaleControl,
+  type GeoJSONSource,
   type MapMouseEvent,
 } from 'maplibre-gl';
 import './setupMapLibre';
 import { createBuildingsLayer, type BuildingsLayerApi } from './buildingsLayer';
 import type { BBox, BuildingFeature, Origin } from '../types';
 import 'maplibre-gl/dist/maplibre-gl.css';
+
+const SELECTION_SOURCE = 'selection-area';
+
+const EMPTY_FC = { type: 'FeatureCollection' as const, features: [] };
+
+function bboxToFeatureCollection(bbox: BBox) {
+  return {
+    type: 'FeatureCollection' as const,
+    features: [
+      {
+        type: 'Feature' as const,
+        properties: {},
+        geometry: {
+          type: 'Polygon' as const,
+          coordinates: [
+            [
+              [bbox.west, bbox.south],
+              [bbox.east, bbox.south],
+              [bbox.east, bbox.north],
+              [bbox.west, bbox.north],
+              [bbox.west, bbox.south],
+            ],
+          ],
+        },
+      },
+    ],
+  };
+}
 
 export type MapViewProps = {
   buildings: BuildingFeature[];
@@ -50,6 +79,7 @@ export function MapView({
   const buildingsRef = useRef(buildings);
   const originRef = useRef(origin);
   const selectionRef = useRef(selection);
+  const setOverlayRef = useRef<(bbox: BBox | null) => void>(() => {});
 
   selectingRef.current = selecting;
   onSelectionChangeRef.current = onSelectionChange;
@@ -77,6 +107,13 @@ export function MapView({
     const layer = createBuildingsLayer();
     layerRef.current = layer;
 
+    const setOverlay = (bbox: BBox | null) => {
+      const src = map.getSource(SELECTION_SOURCE) as GeoJSONSource | undefined;
+      if (!src) return;
+      src.setData(bbox ? bboxToFeatureCollection(bbox) : EMPTY_FC);
+    };
+    setOverlayRef.current = setOverlay;
+
     let boot = 0;
     const syncReady = () => {
       if (mapReadyRef.current) return;
@@ -84,8 +121,34 @@ export function MapView({
       mapReadyRef.current = true;
       window.clearInterval(boot);
       if (!map.getLayer(layer.id)) map.addLayer(layer);
+
+      // Selection highlight overlay, drawn above the 3D buildings so the chosen
+      // area is always clearly visible (translucent fill + bold dashed outline).
+      if (!map.getSource(SELECTION_SOURCE)) {
+        map.addSource(SELECTION_SOURCE, { type: 'geojson', data: EMPTY_FC });
+        map.addLayer({
+          id: 'selection-fill',
+          type: 'fill',
+          source: SELECTION_SOURCE,
+          paint: { 'fill-color': '#ff7a1a', 'fill-opacity': 0.2 },
+        });
+        map.addLayer({
+          id: 'selection-outline',
+          type: 'line',
+          source: SELECTION_SOURCE,
+          paint: {
+            'line-color': '#ff7a1a',
+            'line-width': 3,
+            'line-dasharray': [2, 1],
+          },
+        });
+      }
+
       layer.setBuildings(buildingsRef.current, originRef.current);
-      if (selectionRef.current) layer.setSelectionBBox(selectionRef.current);
+      if (selectionRef.current) {
+        layer.setSelectionBBox(selectionRef.current);
+        setOverlay(selectionRef.current);
+      }
       const c = map.getCenter();
       onMoveEndRef.current({ lng: c.lng, lat: c.lat }, map.getZoom(), mapBoundsToBBox(map));
     };
@@ -117,6 +180,7 @@ export function MapView({
         north: Math.max(lat0, e.lngLat.lat),
       };
       layer.setSelectionBBox(bbox);
+      setOverlay(bbox);
       onSelectionChangeRef.current(bbox);
     };
 
@@ -149,6 +213,7 @@ export function MapView({
   useEffect(() => {
     if (!mapReadyRef.current) return;
     layerRef.current?.setSelectionBBox(selection);
+    setOverlayRef.current(selection);
   }, [selection]);
 
   useEffect(() => {
