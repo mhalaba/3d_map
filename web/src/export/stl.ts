@@ -78,6 +78,16 @@ export function downloadBlob(blob: Blob, filename: string): void {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  // The anchor must be in the document for the click to trigger a download in
+  // some browsers (e.g. Firefox). Revoking the object URL is deferred, because
+  // revoking synchronously right after click() cancels the in-flight download
+  // in several browsers — especially for larger STL blobs.
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => {
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, 2000);
 }
