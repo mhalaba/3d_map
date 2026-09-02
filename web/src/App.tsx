@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MapView } from './map/MapView';
+import { MapView, type SelectionCommit } from './map/MapView';
 import { fetchBuildings } from './data/overpass';
 import { bboxAreaKm2, bboxCenter } from './geo/projection';
-import { downloadBlob, exportStl, filterBuildingsInBBox } from './export/stl';
+import { downloadBlob, exportStl } from './export/stl';
 import type { BBox, BuildingFeature, Origin } from './types';
 import './App.css';
 
-function clampBBoxAround(center: Origin, bbox: BBox, maxHalfDeg = 0.0035): BBox {
-  const halfLng = Math.min(Math.max((bbox.east - bbox.west) / 2, 0.0008), maxHalfDeg);
-  const halfLat = Math.min(Math.max((bbox.north - bbox.south) / 2, 0.0008), maxHalfDeg);
+/** Load a generous box around the camera center so pitched views still have data. */
+function clampBBoxAround(center: Origin, bbox: BBox, maxHalfDeg = 0.006): BBox {
+  const halfLng = Math.min(Math.max((bbox.east - bbox.west) / 2, 0.0012), maxHalfDeg);
+  const halfLat = Math.min(Math.max((bbox.north - bbox.south) / 2, 0.0012), maxHalfDeg);
   return {
     west: center.lng - halfLng,
     east: center.lng + halfLng,
@@ -33,6 +34,7 @@ export default function App() {
   const [origin, setOrigin] = useState<Origin>(DEFAULT_ORIGIN);
   const [selecting, setSelecting] = useState(false);
   const [selection, setSelection] = useState<BBox | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('Przesuń mapę, aby wczytać budynki OSM');
@@ -46,10 +48,13 @@ export default function App() {
   const viewBBoxRef = useRef<BBox | null>(null);
   const readyDownloadRef = useRef<ReadyDownload | null>(null);
 
-  const selectedCount = useMemo(
-    () => (selection ? filterBuildingsInBBox(buildings, selection).length : 0),
-    [buildings, selection],
-  );
+  const selectedBuildings = useMemo(() => {
+    if (!selectedIds.length) return [];
+    const idSet = new Set(selectedIds);
+    return buildings.filter((b) => idSet.has(b.id));
+  }, [buildings, selectedIds]);
+
+  const selectedCount = selectedBuildings.length;
 
   const revokeReadyDownload = useCallback(() => {
     if (readyDownloadRef.current) {
@@ -109,8 +114,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    // Initial OSM fetch around default center (do not wait only for map moveend).
-    const pad = 0.004;
+    const pad = 0.005;
     void loadForBBox({
       west: DEFAULT_ORIGIN.lng - pad,
       east: DEFAULT_ORIGIN.lng + pad,
@@ -124,33 +128,67 @@ export default function App() {
     };
   }, [loadForBBox, revokeReadyDownload]);
 
+  // Keep selected IDs valid after a buildings refresh.
+  useEffect(() => {
+    if (!selectedIds.length) return;
+    const alive = new Set(buildings.map((b) => b.id));
+    const next = selectedIds.filter((id) => alive.has(id));
+    if (next.length !== selectedIds.length) setSelectedIds(next);
+  }, [buildings, selectedIds]);
+
   const startSelect = () => {
     setSelecting(true);
     setSelection(null);
+    setSelectedIds([]);
     revokeReadyDownload();
-    setStatus('Przeciągnij prostokąt na mapie, aby zaznaczyć obszar eksportu');
+    setError(null);
+    setStatus('Przeciągnij prostokąt na beżowych bryłach 3D');
   };
 
   const clearSelect = () => {
     setSelecting(false);
     setSelection(null);
+    setSelectedIds([]);
     revokeReadyDownload();
     setStatus(`Załadowano ${buildings.length} obiektów`);
   };
 
-  const commitSelection = useCallback((bbox: BBox | null) => {
-    setSelection(bbox);
-    if (bbox) {
-      // Leave select mode so the export panel stays stable and clicks reach the button.
+  const commitSelection = useCallback(
+    (commit: SelectionCommit | null) => {
+      if (!commit) {
+        setSelection(null);
+        setSelectedIds([]);
+        return;
+      }
+      setSelection(commit.bbox);
+      setSelectedIds(commit.buildingIds);
       setSelecting(false);
-      setStatus('Zaznaczenie gotowe — ustaw skalę i pobierz STL');
-    }
-  }, []);
+      if (commit.buildingIds.length === 0) {
+        if (buildings.length === 0) {
+          setStatus('Brak wczytanych budynków OSM — kliknij Odśwież OSM');
+          setError('Najpierw wczytaj budynki 3D (Overpass), potem zaznacz ponownie.');
+        } else {
+          setStatus('Zaznaczenie bez brył 3D — spróbuj większy prostokąt na beżowych budynkach');
+          setError(null);
+        }
+      } else {
+        setError(null);
+        setStatus(
+          `Zaznaczono ${commit.buildingIds.length} budynków — ustaw skalę i pobierz STL`,
+        );
+      }
+    },
+    [buildings.length],
+  );
 
   const handleExport = async () => {
     if (!selection) return;
     if (selectedCount === 0) {
-      setError('Brak budynków w zaznaczeniu. Narysuj prostokąt na budynkach 3D.');
+      setError(
+        buildings.length === 0
+          ? 'Brak wczytanych budynków OSM. Kliknij Odśwież OSM.'
+          : 'Brak budynków 3D w zaznaczeniu. Zaznacz beżowe bryły na mapie.',
+      );
       return;
     }
     const area = bboxAreaKm2(selection);
@@ -161,10 +199,11 @@ export default function App() {
     setExporting(true);
     setError(null);
     try {
-      const { blob, count, filename, triangles } = exportStl(buildings, selection, {
+      const { blob, count, filename, triangles } = exportStl(selectedBuildings, selection, {
         metersToMm,
         basePlateMm,
         binary: true,
+        prefiltered: true,
       });
       const { objectUrl, method } = await downloadBlob(blob, filename);
       revokeReadyDownload();
@@ -204,6 +243,7 @@ export default function App() {
         origin={origin}
         selecting={selecting}
         selection={selection}
+        selectedIds={selectedIds}
         onSelectionChange={commitSelection}
         onMoveEnd={onMoveEnd}
       />
@@ -254,7 +294,9 @@ export default function App() {
           </p>
           {selectedCount === 0 && (
             <p className="export-warn">
-              Brak budynków w tym prostokącie — narysuj zaznaczenie bezpośrednio na bryłach 3D.
+              {buildings.length === 0
+                ? 'Brak wczytanych budynków OSM — kliknij Odśwież OSM, poczekaj na beżowe bryły 3D.'
+                : `Załadowano ${buildings.length} brył, ale żadna nie trafiła w prostokąt. Zaznacz większy obszar bezpośrednio na beżowych budynkach 3D (nie na szarym planie 2D).`}
             </p>
           )}
           <label className="field">
@@ -286,7 +328,7 @@ export default function App() {
             aria-disabled={exportBlocked}
             title={
               selectedCount === 0
-                ? 'Zaznacz obszar zawierający budynki'
+                ? 'Zaznacz obszar zawierający budynki 3D'
                 : 'Pobierz plik STL do druku 3D'
             }
           >

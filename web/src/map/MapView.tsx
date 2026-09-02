@@ -5,9 +5,17 @@ import {
   ScaleControl,
   type GeoJSONSource,
   type MapMouseEvent,
+  type PointLike,
 } from 'maplibre-gl';
 import './setupMapLibre';
 import { createBuildingsLayer, type BuildingsLayerApi } from './buildingsLayer';
+import {
+  filterBuildingsInScreenRect,
+  isMeaningfulScreenRect,
+  normalizeScreenRect,
+  resolveSelectionBuildings,
+  screenRectToGeoBBox,
+} from '../geo/selection';
 import type { BBox, BuildingFeature, Origin } from '../types';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
@@ -39,24 +47,23 @@ function bboxToFeatureCollection(bbox: BBox) {
   };
 }
 
+export type SelectionCommit = {
+  bbox: BBox;
+  buildingIds: string[];
+};
+
 export type MapViewProps = {
   buildings: BuildingFeature[];
   origin: Origin;
   selecting: boolean;
   selection: BBox | null;
+  selectedIds?: string[];
   /** Live preview while dragging; does not commit the export selection. */
   onSelectionDraft?: (bbox: BBox | null) => void;
   /** Fired on mouseup when a selection rectangle is committed. */
-  onSelectionChange: (bbox: BBox | null) => void;
+  onSelectionChange: (commit: SelectionCommit | null) => void;
   onMoveEnd: (center: Origin, zoom: number, viewBBox: BBox) => void;
 };
-
-function isMeaningfulBBox(bbox: BBox): boolean {
-  const lngSpan = Math.abs(bbox.east - bbox.west);
-  const latSpan = Math.abs(bbox.north - bbox.south);
-  // ~5–6 m at mid-latitudes — ignore accidental clicks
-  return lngSpan > 0.00005 && latSpan > 0.00005;
-}
 
 function mapBoundsToBBox(map: MapLibreMap): BBox {
   const b = map.getBounds();
@@ -68,11 +75,17 @@ function mapBoundsToBBox(map: MapLibreMap): BBox {
   };
 }
 
+function pointXY(point: { x: number; y: number } | PointLike): { x: number; y: number } {
+  if (Array.isArray(point)) return { x: point[0], y: point[1] };
+  return { x: point.x, y: point.y };
+}
+
 export function MapView({
   buildings,
   origin,
   selecting,
   selection,
+  selectedIds = [],
   onSelectionDraft,
   onSelectionChange,
   onMoveEnd,
@@ -83,8 +96,9 @@ export function MapView({
     null,
   );
   const mapReadyRef = useRef(false);
-  const dragStartRef = useRef<[number, number] | null>(null);
-  const draftRef = useRef<BBox | null>(null);
+  const dragStartRef = useRef<{ x: number; y: number } | null>(null);
+  const draftRectRef = useRef<ReturnType<typeof normalizeScreenRect> | null>(null);
+  const draftBBoxRef = useRef<BBox | null>(null);
   const selectingRef = useRef(selecting);
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onSelectionDraftRef = useRef(onSelectionDraft);
@@ -128,6 +142,21 @@ export function MapView({
     };
     setOverlayRef.current = setOverlay;
 
+    const geoFromScreen = (rect: ReturnType<typeof normalizeScreenRect>): BBox =>
+      screenRectToGeoBBox((x, y) => {
+        const ll = map.unproject([x, y]);
+        return { lng: ll.lng, lat: ll.lat };
+      }, rect);
+
+    const previewSelection = (rect: ReturnType<typeof normalizeScreenRect>) => {
+      const bbox = geoFromScreen(rect);
+      draftRectRef.current = rect;
+      draftBBoxRef.current = bbox;
+      layer.setSelectionBBox(bbox);
+      setOverlay(bbox);
+      onSelectionDraftRef.current?.(bbox);
+    };
+
     let boot = 0;
     const syncReady = () => {
       if (mapReadyRef.current) return;
@@ -136,8 +165,6 @@ export function MapView({
       window.clearInterval(boot);
       if (!map.getLayer(layer.id)) map.addLayer(layer);
 
-      // Selection highlight overlay, drawn above the 3D buildings so the chosen
-      // area is always clearly visible (translucent fill + bold dashed outline).
       if (!map.getSource(SELECTION_SOURCE)) {
         map.addSource(SELECTION_SOURCE, { type: 'geojson', data: EMPTY_FC });
         map.addLayer({
@@ -163,8 +190,6 @@ export function MapView({
         layer.setSelectionBBox(selectionRef.current);
         setOverlay(selectionRef.current);
       }
-      // Correct any initial size mismatch (fonts/layout settling, HiDPI) so the
-      // map canvas fills its container instead of a partial strip.
       map.resize();
       const c = map.getCenter();
       onMoveEndRef.current({ lng: c.lng, lat: c.lat }, map.getZoom(), mapBoundsToBBox(map));
@@ -174,9 +199,6 @@ export function MapView({
     map.on('error', (e) => console.error('MapLibre error', e.error ?? e));
     boot = window.setInterval(syncReady, 250);
 
-    // Keep the map sized to its container even when the window itself does not
-    // resize (split layouts, devtools, late layout shifts). Guarded by rAF to
-    // coalesce bursts.
     let resizeRaf = 0;
     const resizeObserver = new ResizeObserver(() => {
       if (resizeRaf) return;
@@ -196,38 +218,45 @@ export function MapView({
       if (!selectingRef.current) return;
       if (e.originalEvent.button !== 0) return;
       e.preventDefault();
-      dragStartRef.current = [e.lngLat.lng, e.lngLat.lat];
-      draftRef.current = null;
+      dragStartRef.current = pointXY(e.point);
+      draftRectRef.current = null;
+      draftBBoxRef.current = null;
       map.dragPan.disable();
     };
 
     const onMouseMove = (e: MapMouseEvent) => {
       if (!selectingRef.current || !dragStartRef.current) return;
-      const [lng0, lat0] = dragStartRef.current;
-      const bbox: BBox = {
-        west: Math.min(lng0, e.lngLat.lng),
-        east: Math.max(lng0, e.lngLat.lng),
-        south: Math.min(lat0, e.lngLat.lat),
-        north: Math.max(lat0, e.lngLat.lat),
-      };
-      draftRef.current = bbox;
-      layer.setSelectionBBox(bbox);
-      setOverlay(bbox);
-      // Preview only — do NOT commit. Committing mid-drag mounts the export
-      // panel under the cursor and steals mouseup / blocks "Pobierz STL".
-      onSelectionDraftRef.current?.(bbox);
+      const start = dragStartRef.current;
+      const end = pointXY(e.point);
+      previewSelection(normalizeScreenRect(start.x, start.y, end.x, end.y));
     };
 
     const finishDrag = () => {
       if (!dragStartRef.current) return;
       dragStartRef.current = null;
       map.dragPan.enable();
-      const draft = draftRef.current;
-      draftRef.current = null;
-      if (draft && isMeaningfulBBox(draft)) {
-        layer.setSelectionBBox(draft);
-        setOverlay(draft);
-        onSelectionChangeRef.current(draft);
+      const rect = draftRectRef.current;
+      const bbox = draftBBoxRef.current;
+      draftRectRef.current = null;
+      draftBBoxRef.current = null;
+
+      if (rect && bbox && isMeaningfulScreenRect(rect)) {
+        const screenHits = filterBuildingsInScreenRect(
+          buildingsRef.current,
+          rect,
+          (lng, lat) => {
+            const p = map.project([lng, lat]);
+            return { x: p.x, y: p.y };
+          },
+        );
+        const selected = resolveSelectionBuildings(buildingsRef.current, bbox, screenHits);
+        layer.setSelectionBBox(bbox);
+        layer.setSelectedIds(selected.map((b) => b.id));
+        setOverlay(bbox);
+        onSelectionChangeRef.current({
+          bbox,
+          buildingIds: selected.map((b) => b.id),
+        });
       } else {
         layer.setSelectionBBox(selectionRef.current);
         setOverlay(selectionRef.current);
@@ -238,7 +267,6 @@ export function MapView({
     map.on('mousedown', onMouseDown);
     map.on('mousemove', onMouseMove);
     map.on('mouseup', finishDrag);
-    // mouseup may land on the UI overlay above the map — still finalize.
     window.addEventListener('mouseup', finishDrag);
 
     mapRef.current = map;
@@ -263,8 +291,10 @@ export function MapView({
   useEffect(() => {
     if (!mapReadyRef.current) return;
     layerRef.current?.setSelectionBBox(selection);
+    // Restore screen-resolved IDs after geo bbox recompute inside setSelectionBBox.
+    if (selectedIds.length) layerRef.current?.setSelectedIds(selectedIds);
     setOverlayRef.current(selection);
-  }, [selection]);
+  }, [selection, selectedIds]);
 
   useEffect(() => {
     const canvas = mapRef.current?.getCanvas();

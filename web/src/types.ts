@@ -66,4 +66,6 @@ export type ExportOptions = {
   metersToMm: number;
   basePlateMm: number;
   binary: boolean;
+  /** When true, `buildings` is already the export set (skip bbox filter). */
+  prefiltered?: boolean;
 };

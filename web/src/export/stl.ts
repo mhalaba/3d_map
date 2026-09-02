@@ -20,7 +20,7 @@ export function buildExportScene(
   bbox: BBox,
   options: ExportOptions,
 ): { scene: THREE.Scene; count: number; origin: { lng: number; lat: number } } {
-  const selected = filterBuildingsInBBox(buildings, bbox);
+  const selected = options.prefiltered ? buildings : filterBuildingsInBBox(buildings, bbox);
   const origin = bboxCenter(bbox);
   const scene = new THREE.Scene();
   const projected = selected

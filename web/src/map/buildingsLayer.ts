@@ -12,6 +12,7 @@ import type { BBox, BuildingFeature, Origin } from '../types';
 export type BuildingsLayerApi = {
   setBuildings: (buildings: BuildingFeature[], origin: Origin) => void;
   setSelectionBBox: (bbox: BBox | null) => void;
+  setSelectedIds: (ids: Iterable<string>) => void;
   getSelectedCount: () => number;
 };
 
@@ -192,6 +193,11 @@ export function createBuildingsLayer(id = 'buildings-3d'): CustomLayerInterface 
       selectedIds = new Set(
         buildings.filter((bldg) => ringIntersectsBBox(bldg.outer, bbox)).map((bldg) => bldg.id),
       );
+      applySelectionColors();
+    },
+
+    setSelectedIds(ids) {
+      selectedIds = new Set(ids);
       applySelectionColors();
     },
 
