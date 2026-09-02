@@ -5,6 +5,7 @@ import {
   ScaleControl,
   type GeoJSONSource,
   type MapMouseEvent,
+  type MapTouchEvent,
   type PointLike,
 } from 'maplibre-gl';
 import './setupMapLibre';
@@ -198,17 +199,21 @@ export function MapView({
       onMoveEndRef.current({ lng: c.lng, lat: c.lat }, map.getZoom(), mapBoundsToBBox(map));
     });
 
-    const onMouseDown = (e: MapMouseEvent) => {
+    type MapPointerEvent = MapMouseEvent | MapTouchEvent;
+
+    const onPointerDown = (e: MapPointerEvent) => {
       if (!selectingRef.current) return;
-      if (e.originalEvent.button !== 0) return;
+      const oe = e.originalEvent as MouseEvent | TouchEvent;
+      if ('button' in oe && typeof oe.button === 'number' && oe.button !== 0) return;
       e.preventDefault();
       dragStartRef.current = pointXY(e.point);
       draftRectRef.current = null;
       draftBBoxRef.current = null;
       map.dragPan.disable();
+      map.touchZoomRotate.disable();
     };
 
-    const onMouseMove = (e: MapMouseEvent) => {
+    const onPointerMove = (e: MapPointerEvent) => {
       if (!selectingRef.current || !dragStartRef.current) return;
       const start = dragStartRef.current;
       const end = pointXY(e.point);
@@ -219,6 +224,7 @@ export function MapView({
       if (!dragStartRef.current) return;
       dragStartRef.current = null;
       map.dragPan.enable();
+      map.touchZoomRotate.enable();
       const rect = draftRectRef.current;
       const bbox = draftBBoxRef.current;
       draftRectRef.current = null;
@@ -234,10 +240,16 @@ export function MapView({
       }
     };
 
-    map.on('mousedown', onMouseDown);
-    map.on('mousemove', onMouseMove);
+    map.on('mousedown', onPointerDown as (e: MapMouseEvent) => void);
+    map.on('mousemove', onPointerMove as (e: MapMouseEvent) => void);
     map.on('mouseup', finishDrag);
+    // Touch: MapLibre emits touch* ; also listen so mobile selects work.
+    map.on('touchstart', onPointerDown as (e: MapTouchEvent) => void);
+    map.on('touchmove', onPointerMove as (e: MapTouchEvent) => void);
+    map.on('touchend', finishDrag);
+    map.on('touchcancel', finishDrag);
     window.addEventListener('mouseup', finishDrag);
+    window.addEventListener('touchend', finishDrag);
 
     mapRef.current = map;
 
@@ -246,6 +258,7 @@ export function MapView({
       if (resizeRaf) window.cancelAnimationFrame(resizeRaf);
       resizeObserver.disconnect();
       window.removeEventListener('mouseup', finishDrag);
+      window.removeEventListener('touchend', finishDrag);
       mapReadyRef.current = false;
       map.remove();
       mapRef.current = null;
