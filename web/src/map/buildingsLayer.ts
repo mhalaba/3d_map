@@ -141,6 +141,12 @@ export function createBuildingsLayer(id = 'buildings-3d'): CustomLayerInterface 
 
       camera.projectionMatrix = m.multiply(l);
       renderer.resetState();
+      // Keep the three.js viewport locked to the full drawing buffer. The renderer
+      // shares MapLibre's GL context, and without this the 3D layer can stay pinned
+      // to a stale (often smaller) viewport after a resize / HiDPI change, leaving
+      // buildings squeezed into a corner of the map.
+      const canvas = map.getCanvas();
+      renderer.setViewport(0, 0, canvas.width, canvas.height);
       renderer.render(scene, camera);
       // Do not call map.triggerRepaint() every frame — it can starve base map tiles.
     },

@@ -149,6 +149,9 @@ export function MapView({
         layer.setSelectionBBox(selectionRef.current);
         setOverlay(selectionRef.current);
       }
+      // Correct any initial size mismatch (fonts/layout settling, HiDPI) so the
+      // map canvas fills its container instead of a partial strip.
+      map.resize();
       const c = map.getCenter();
       onMoveEndRef.current({ lng: c.lng, lat: c.lat }, map.getZoom(), mapBoundsToBBox(map));
     };
@@ -156,6 +159,19 @@ export function MapView({
     map.on('load', syncReady);
     map.on('error', (e) => console.error('MapLibre error', e.error ?? e));
     boot = window.setInterval(syncReady, 250);
+
+    // Keep the map sized to its container even when the window itself does not
+    // resize (split layouts, devtools, late layout shifts). Guarded by rAF to
+    // coalesce bursts.
+    let resizeRaf = 0;
+    const resizeObserver = new ResizeObserver(() => {
+      if (resizeRaf) return;
+      resizeRaf = window.requestAnimationFrame(() => {
+        resizeRaf = 0;
+        if (mapRef.current) mapRef.current.resize();
+      });
+    });
+    if (containerRef.current) resizeObserver.observe(containerRef.current);
 
     map.on('moveend', () => {
       const c = map.getCenter();
@@ -198,6 +214,8 @@ export function MapView({
 
     return () => {
       window.clearInterval(boot);
+      if (resizeRaf) window.cancelAnimationFrame(resizeRaf);
+      resizeObserver.disconnect();
       mapReadyRef.current = false;
       map.remove();
       mapRef.current = null;
