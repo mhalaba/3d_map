@@ -44,9 +44,19 @@ export type MapViewProps = {
   origin: Origin;
   selecting: boolean;
   selection: BBox | null;
+  /** Live preview while dragging; does not commit the export selection. */
+  onSelectionDraft?: (bbox: BBox | null) => void;
+  /** Fired on mouseup when a selection rectangle is committed. */
   onSelectionChange: (bbox: BBox | null) => void;
   onMoveEnd: (center: Origin, zoom: number, viewBBox: BBox) => void;
 };
+
+function isMeaningfulBBox(bbox: BBox): boolean {
+  const lngSpan = Math.abs(bbox.east - bbox.west);
+  const latSpan = Math.abs(bbox.north - bbox.south);
+  // ~5–6 m at mid-latitudes — ignore accidental clicks
+  return lngSpan > 0.00005 && latSpan > 0.00005;
+}
 
 function mapBoundsToBBox(map: MapLibreMap): BBox {
   const b = map.getBounds();
@@ -63,6 +73,7 @@ export function MapView({
   origin,
   selecting,
   selection,
+  onSelectionDraft,
   onSelectionChange,
   onMoveEnd,
 }: MapViewProps) {
@@ -73,8 +84,10 @@ export function MapView({
   );
   const mapReadyRef = useRef(false);
   const dragStartRef = useRef<[number, number] | null>(null);
+  const draftRef = useRef<BBox | null>(null);
   const selectingRef = useRef(selecting);
   const onSelectionChangeRef = useRef(onSelectionChange);
+  const onSelectionDraftRef = useRef(onSelectionDraft);
   const onMoveEndRef = useRef(onMoveEnd);
   const buildingsRef = useRef(buildings);
   const originRef = useRef(origin);
@@ -83,6 +96,7 @@ export function MapView({
 
   selectingRef.current = selecting;
   onSelectionChangeRef.current = onSelectionChange;
+  onSelectionDraftRef.current = onSelectionDraft;
   onMoveEndRef.current = onMoveEnd;
   buildingsRef.current = buildings;
   originRef.current = origin;
@@ -183,6 +197,7 @@ export function MapView({
       if (e.originalEvent.button !== 0) return;
       e.preventDefault();
       dragStartRef.current = [e.lngLat.lng, e.lngLat.lat];
+      draftRef.current = null;
       map.dragPan.disable();
     };
 
@@ -195,20 +210,36 @@ export function MapView({
         south: Math.min(lat0, e.lngLat.lat),
         north: Math.max(lat0, e.lngLat.lat),
       };
+      draftRef.current = bbox;
       layer.setSelectionBBox(bbox);
       setOverlay(bbox);
-      onSelectionChangeRef.current(bbox);
+      // Preview only — do NOT commit. Committing mid-drag mounts the export
+      // panel under the cursor and steals mouseup / blocks "Pobierz STL".
+      onSelectionDraftRef.current?.(bbox);
     };
 
-    const onMouseUp = () => {
+    const finishDrag = () => {
       if (!dragStartRef.current) return;
       dragStartRef.current = null;
       map.dragPan.enable();
+      const draft = draftRef.current;
+      draftRef.current = null;
+      if (draft && isMeaningfulBBox(draft)) {
+        layer.setSelectionBBox(draft);
+        setOverlay(draft);
+        onSelectionChangeRef.current(draft);
+      } else {
+        layer.setSelectionBBox(selectionRef.current);
+        setOverlay(selectionRef.current);
+        onSelectionDraftRef.current?.(null);
+      }
     };
 
     map.on('mousedown', onMouseDown);
     map.on('mousemove', onMouseMove);
-    map.on('mouseup', onMouseUp);
+    map.on('mouseup', finishDrag);
+    // mouseup may land on the UI overlay above the map — still finalize.
+    window.addEventListener('mouseup', finishDrag);
 
     mapRef.current = map;
 
@@ -216,6 +247,7 @@ export function MapView({
       window.clearInterval(boot);
       if (resizeRaf) window.cancelAnimationFrame(resizeRaf);
       resizeObserver.disconnect();
+      window.removeEventListener('mouseup', finishDrag);
       mapReadyRef.current = false;
       map.remove();
       mapRef.current = null;

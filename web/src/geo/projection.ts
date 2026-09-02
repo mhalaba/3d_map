@@ -38,16 +38,81 @@ export function pointInBBox(lng: number, lat: number, bbox: BBox): boolean {
   return lng >= bbox.west && lng <= bbox.east && lat >= bbox.south && lat <= bbox.north;
 }
 
+function segmentsIntersect(a: LngLat, b: LngLat, c: LngLat, d: LngLat): boolean {
+  const orient = (p: LngLat, q: LngLat, r: LngLat) =>
+    Math.sign((q[1] - p[1]) * (r[0] - q[0]) - (q[0] - p[0]) * (r[1] - q[1]));
+  const o1 = orient(a, b, c);
+  const o2 = orient(a, b, d);
+  const o3 = orient(c, d, a);
+  const o4 = orient(c, d, b);
+  return o1 !== 0 && o2 !== 0 && o3 !== 0 && o4 !== 0 && o1 !== o2 && o3 !== o4;
+}
+
 export function ringIntersectsBBox(ring: LngLat[], bbox: BBox): boolean {
+  if (ring.length < 2) return false;
+
+  let minLng = Infinity;
+  let maxLng = -Infinity;
+  let minLat = Infinity;
+  let maxLat = -Infinity;
+  for (const [lng, lat] of ring) {
+    minLng = Math.min(minLng, lng);
+    maxLng = Math.max(maxLng, lng);
+    minLat = Math.min(minLat, lat);
+    maxLat = Math.max(maxLat, lat);
+  }
+  // Fast reject when envelopes don't overlap
+  if (maxLng < bbox.west || minLng > bbox.east || maxLat < bbox.south || minLat > bbox.north) {
+    return false;
+  }
+  // Building envelope fully inside selection
+  if (
+    minLng >= bbox.west &&
+    maxLng <= bbox.east &&
+    minLat >= bbox.south &&
+    maxLat <= bbox.north
+  ) {
+    return true;
+  }
+
   if (ring.some(([lng, lat]) => pointInBBox(lng, lat, bbox))) return true;
-  // crude: bbox corners inside ring via ray cast
+
   const corners: LngLat[] = [
     [bbox.west, bbox.south],
     [bbox.east, bbox.south],
     [bbox.east, bbox.north],
     [bbox.west, bbox.north],
   ];
-  return corners.some((c) => pointInRing(c, ring));
+  if (corners.some((c) => pointInRing(c, ring))) return true;
+
+  // Edge crossings — catches long buildings that span the selection without
+  // putting a vertex inside or containing a selection corner.
+  const bboxEdges: [LngLat, LngLat][] = [
+    [
+      [bbox.west, bbox.south],
+      [bbox.east, bbox.south],
+    ],
+    [
+      [bbox.east, bbox.south],
+      [bbox.east, bbox.north],
+    ],
+    [
+      [bbox.east, bbox.north],
+      [bbox.west, bbox.north],
+    ],
+    [
+      [bbox.west, bbox.north],
+      [bbox.west, bbox.south],
+    ],
+  ];
+  for (let i = 0; i < ring.length; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % ring.length];
+    for (const [c, d] of bboxEdges) {
+      if (segmentsIntersect(a, b, c, d)) return true;
+    }
+  }
+  return false;
 }
 
 function pointInRing(point: LngLat, ring: LngLat[]): boolean {

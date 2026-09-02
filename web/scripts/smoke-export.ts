@@ -44,7 +44,7 @@ for (const shape of shapes) {
 }
 
 const buildings = shapes.map((s) => squareBuilding(`e-${s}`, s));
-const { blob, count, filename } = exportStl(
+const { blob, count, filename, triangles } = exportStl(
   buildings,
   { west: 21.0099, south: 52.2299, east: 21.0105, north: 52.2304 },
   { metersToMm: 1, basePlateMm: 2, binary: true },
@@ -52,7 +52,8 @@ const { blob, count, filename } = exportStl(
 
 if (count !== buildings.length) throw new Error(`export count ${count}`);
 if (blob.size < 100) throw new Error(`stl too small: ${blob.size}`);
-console.log(`ok stl ${filename} (${blob.size} bytes, ${count} buildings)`);
+if (triangles < 12) throw new Error(`too few triangles: ${triangles}`);
+console.log(`ok stl ${filename} (${blob.size} bytes, ${count} buildings, ${triangles} tris)`);
 
 // ensure exporter still works on empty-ish scene edge via THREE directly
 const scene = new THREE.Scene();

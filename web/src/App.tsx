@@ -20,6 +20,14 @@ function clampBBoxAround(center: Origin, bbox: BBox, maxHalfDeg = 0.0035): BBox 
 const MAX_AREA_KM2 = 1.5;
 const DEFAULT_ORIGIN: Origin = { lng: 21.0122, lat: 52.2297 }; // Warszawa
 
+type ReadyDownload = {
+  objectUrl: string;
+  filename: string;
+  count: number;
+  triangles: number;
+  bytes: number;
+};
+
 export default function App() {
   const [buildings, setBuildings] = useState<BuildingFeature[]>([]);
   const [origin, setOrigin] = useState<Origin>(DEFAULT_ORIGIN);
@@ -31,15 +39,25 @@ export default function App() {
   const [metersToMm, setMetersToMm] = useState(1); // 1:1000
   const [basePlateMm, setBasePlateMm] = useState(2);
   const [exporting, setExporting] = useState(false);
+  const [readyDownload, setReadyDownload] = useState<ReadyDownload | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
   const fetchTimer = useRef<number | null>(null);
   const viewBBoxRef = useRef<BBox | null>(null);
+  const readyDownloadRef = useRef<ReadyDownload | null>(null);
 
   const selectedCount = useMemo(
     () => (selection ? filterBuildingsInBBox(buildings, selection).length : 0),
     [buildings, selection],
   );
+
+  const revokeReadyDownload = useCallback(() => {
+    if (readyDownloadRef.current) {
+      URL.revokeObjectURL(readyDownloadRef.current.objectUrl);
+      readyDownloadRef.current = null;
+      setReadyDownload(null);
+    }
+  }, []);
 
   const loadForBBox = useCallback(async (rawBBox: BBox, center?: Origin) => {
     const bbox = clampBBoxAround(center ?? bboxCenter(rawBBox), rawBBox);
@@ -102,23 +120,39 @@ export default function App() {
     return () => {
       abortRef.current?.abort();
       if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
+      revokeReadyDownload();
     };
-  }, [loadForBBox]);
+  }, [loadForBBox, revokeReadyDownload]);
 
   const startSelect = () => {
     setSelecting(true);
     setSelection(null);
+    revokeReadyDownload();
     setStatus('Przeciągnij prostokąt na mapie, aby zaznaczyć obszar eksportu');
   };
 
   const clearSelect = () => {
     setSelecting(false);
     setSelection(null);
+    revokeReadyDownload();
     setStatus(`Załadowano ${buildings.length} obiektów`);
   };
 
-  const handleExport = () => {
+  const commitSelection = useCallback((bbox: BBox | null) => {
+    setSelection(bbox);
+    if (bbox) {
+      // Leave select mode so the export panel stays stable and clicks reach the button.
+      setSelecting(false);
+      setStatus('Zaznaczenie gotowe — ustaw skalę i pobierz STL');
+    }
+  }, []);
+
+  const handleExport = async () => {
     if (!selection) return;
+    if (selectedCount === 0) {
+      setError('Brak budynków w zaznaczeniu. Narysuj prostokąt na budynkach 3D.');
+      return;
+    }
     const area = bboxAreaKm2(selection);
     if (area > MAX_AREA_KM2) {
       setError(`Zaznaczenie zbyt duże (${area.toFixed(2)} km²). Max ${MAX_AREA_KM2} km².`);
@@ -127,22 +161,41 @@ export default function App() {
     setExporting(true);
     setError(null);
     try {
-      const { blob, count, filename } = exportStl(buildings, selection, {
+      const { blob, count, filename, triangles } = exportStl(buildings, selection, {
         metersToMm,
         basePlateMm,
         binary: true,
       });
-      downloadBlob(blob, filename);
-      setStatus(`Wyeksportowano ${count} budynków → ${filename}`);
+      const { objectUrl, method } = await downloadBlob(blob, filename);
+      revokeReadyDownload();
+      const next: ReadyDownload = {
+        objectUrl,
+        filename,
+        count,
+        triangles,
+        bytes: blob.size,
+      };
+      readyDownloadRef.current = next;
+      setReadyDownload(next);
+      setStatus(
+        method === 'picker'
+          ? `Zapisano ${count} budynków (${triangles} trójkątów) → ${filename}`
+          : `Wyeksportowano ${count} budynków (${triangles} trójkątów) → ${filename}`,
+      );
       setSelecting(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Eksport nieudany');
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        setStatus('Anulowano zapis pliku');
+      } else {
+        setError(err instanceof Error ? err.message : 'Eksport nieudany');
+      }
     } finally {
       setExporting(false);
     }
   };
 
   const selectionArea = selection ? bboxAreaKm2(selection) : 0;
+  const exportBlocked = exporting || selectedCount === 0;
 
   return (
     <div className="app">
@@ -151,7 +204,7 @@ export default function App() {
         origin={origin}
         selecting={selecting}
         selection={selection}
-        onSelectionChange={setSelection}
+        onSelectionChange={commitSelection}
         onMoveEnd={onMoveEnd}
       />
 
@@ -193,12 +246,17 @@ export default function App() {
       </aside>
 
       {selection && (
-        <section className="export-panel">
+        <section className="export-panel" data-testid="export-panel">
           <h2>Eksport STL</h2>
           <p>
             {selectedCount} budynków · {selectionArea.toFixed(3)} km² · dachy LoD2 (
             gabled / hipped / pyramidal / skillion / dome)
           </p>
+          {selectedCount === 0 && (
+            <p className="export-warn">
+              Brak budynków w tym prostokącie — narysuj zaznaczenie bezpośrednio na bryłach 3D.
+            </p>
+          )}
           <label className="field">
             <span>Skala (1 m mapy → mm w STL)</span>
             <input
@@ -223,11 +281,28 @@ export default function App() {
           <button
             type="button"
             className="btn primary wide"
-            onClick={handleExport}
-            disabled={exporting || selectedCount === 0}
+            onClick={() => void handleExport()}
+            disabled={exportBlocked}
+            aria-disabled={exportBlocked}
+            title={
+              selectedCount === 0
+                ? 'Zaznacz obszar zawierający budynki'
+                : 'Pobierz plik STL do druku 3D'
+            }
           >
             {exporting ? 'Generowanie…' : 'Pobierz STL'}
           </button>
+          {readyDownload && (
+            <a
+              className="btn ghost wide download-fallback"
+              href={readyDownload.objectUrl}
+              download={readyDownload.filename}
+              rel="noopener"
+            >
+              Pobierz ponownie ({Math.round(readyDownload.bytes / 1024)} KB ·{' '}
+              {readyDownload.triangles} tri)
+            </a>
+          )}
         </section>
       )}
 
