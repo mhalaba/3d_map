@@ -6,13 +6,11 @@ const OUT = '/opt/cursor/artifacts';
 fs.mkdirSync(OUT, { recursive: true });
 
 function validateBinaryStl(buf) {
-  if (buf.length < 84) return { ok: false, reason: `too small: ${buf.length}` };
+  if (buf.length < 84) return { ok: false, reason: `too small` };
   const triCount = buf.readUInt32LE(80);
   const expected = 84 + triCount * 50;
-  if (buf.length !== expected) {
-    return { ok: false, reason: `size ${buf.length} != expected ${expected}` };
-  }
-  if (triCount < 12) return { ok: false, reason: `too few triangles: ${triCount}` };
+  if (buf.length !== expected) return { ok: false, reason: `size mismatch` };
+  if (triCount < 12) return { ok: false, reason: `too few tris` };
   return { ok: true, triCount, bytes: buf.length };
 }
 
@@ -20,28 +18,20 @@ async function waitForBuildings(page) {
   for (let i = 0; i < 50; i++) {
     const status = await page.locator('.hud-line').innerText();
     console.log(`status[${i}]:`, status);
-    if (/Załadowano\s+\d+/.test(status)) {
-      const n = Number(status.match(/Załadowano\s+(\d+)/)?.[1] ?? 0);
+    if (/Załadowano\s+(\d+)/.test(status)) {
+      const n = Number(status.match(/Załadowano\s+(\d+)/)[1]);
       if (n > 0) return n;
     }
     if (/Nie udało|Błąd/.test(status) && i % 5 === 4) {
       await page.getByRole('button', { name: /Odśwież OSM/i }).click();
     }
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1000);
   }
   throw new Error('buildings never loaded');
 }
 
-async function selectRect(page, x1, y1, x2, y2) {
-  await page.getByRole('button', { name: /Zaznacz obszar/i }).click();
-  await page.waitForTimeout(200);
-  await page.mouse.move(x1, y1);
-  await page.mouse.down();
-  await page.mouse.move(x2, y2, { steps: 16 });
-  const midPanel = await page.locator('[data-testid="export-panel"]').isVisible().catch(() => false);
-  await page.mouse.up();
-  await page.waitForTimeout(700);
-  return midPanel;
+function parseCount(text) {
+  return Number(text.match(/(\d+)\s+budynków/)?.[1] ?? -1);
 }
 
 const browser = await chromium.launch({ headless: true });
@@ -51,90 +41,54 @@ const page = await browser.newPage({
 });
 
 await page.goto('http://127.0.0.1:5173/', { waitUntil: 'networkidle', timeout: 60000 });
-await page.waitForSelector('.brand', { timeout: 15000 });
+await page.waitForSelector('.brand');
 const loaded = await waitForBuildings(page);
-console.log('loaded buildings:', loaded);
+console.log('loaded', loaded);
 
 const canvas = page.locator('.map-root canvas').first();
-await canvas.waitFor({ state: 'visible' });
 const box = await canvas.boundingBox();
-if (!box) throw new Error('no canvas');
 
-// Critical case: upper portion of pitched view (farther ground).
-// Old 2-corner geo bbox often missed buildings here.
-const upperMid = await selectRect(
-  page,
-  box.x + box.width * 0.30,
-  box.y + box.height * 0.18,
-  box.x + box.width * 0.70,
-  box.y + box.height * 0.48,
-);
-console.log('upper mid-drag panel (want false):', upperMid);
+await page.getByRole('button', { name: /Zaznacz obszar/i }).click();
+await page.mouse.move(box.x + box.width * 0.32, box.y + box.height * 0.22);
+await page.mouse.down();
+await page.mouse.move(box.x + box.width * 0.68, box.y + box.height * 0.55, { steps: 20 });
+const mid = await page.locator('[data-testid="export-panel"]').isVisible().catch(() => false);
+await page.mouse.up();
+await page.waitForTimeout(500);
 
-let panel = await page.locator('[data-testid="export-panel"]');
-await panel.waitFor({ state: 'visible', timeout: 5000 });
+const panel = page.locator('[data-testid="export-panel"]');
+await panel.waitFor({ state: 'visible' });
 let text = await panel.innerText();
-console.log('UPPER panel:\n', text);
-const upperCount = Number(text.match(/(\d+)\s+budynków/)?.[1] ?? -1);
-console.log('upper selectedCount:', upperCount);
-await page.screenshot({ path: path.join(OUT, 'pitch-01-upper.png'), fullPage: true });
+let count = parseCount(text);
+console.log('immediate count', count, 'mid-drag panel', mid);
+console.log(text.slice(0, 250));
+await page.screenshot({ path: path.join(OUT, 'race-01-immediate.png'), fullPage: true });
 
-if (upperCount <= 0) {
-  // Clear and try center as secondary signal
-  console.log('UPPER selection empty — trying center');
-}
+if (count <= 0) throw new Error('selection empty immediately after commit');
 
-// Center selection
-await selectRect(
-  page,
-  box.x + box.width * 0.35,
-  box.y + box.height * 0.40,
-  box.x + box.width * 0.65,
-  box.y + box.height * 0.72,
-);
-panel = page.locator('[data-testid="export-panel"]');
+// Wait long enough that a stale Overpass/moveend refresh WOULD have wiped selectedIds before.
+await page.waitForTimeout(3500);
 text = await panel.innerText();
-console.log('CENTER panel:\n', text);
-const centerCount = Number(text.match(/(\d+)\s+budynków/)?.[1] ?? -1);
-console.log('center selectedCount:', centerCount);
-await page.screenshot({ path: path.join(OUT, 'pitch-02-center.png'), fullPage: true });
+const later = parseCount(text);
+console.log('count after 3.5s settle', later);
+await page.screenshot({ path: path.join(OUT, 'race-02-after-wait.png'), fullPage: true });
 
-const best = Math.max(upperCount, centerCount);
-if (best <= 0) {
-  throw new Error(`selectedCount still 0 (upper=${upperCount}, center=${centerCount}, loaded=${loaded})`);
-}
-
-// Prefer whichever has buildings for download
-if (centerCount <= 0 && upperCount > 0) {
-  await selectRect(
-    page,
-    box.x + box.width * 0.30,
-    box.y + box.height * 0.18,
-    box.x + box.width * 0.70,
-    box.y + box.height * 0.48,
-  );
-}
+if (later <= 0) throw new Error('selection became empty after settle — refresh race regresses');
+if (later !== count) console.warn('count changed after settle', count, '->', later);
 
 const btn = page.getByRole('button', { name: /Pobierz STL/i });
-if (await btn.isDisabled()) throw new Error('Pobierz STL disabled despite buildings');
+if (await btn.isDisabled()) throw new Error('button disabled after settle');
 
 const [download] = await Promise.all([
   page.waitForEvent('download', { timeout: 20000 }),
   btn.click(),
 ]);
-const name = await download.suggestedFilename();
-const dest = path.join(OUT, name);
+const dest = path.join(OUT, await download.suggestedFilename());
 await download.saveAs(dest);
 const validation = validateBinaryStl(fs.readFileSync(dest));
-console.log('download', name, validation);
+console.log('stl', validation);
 if (!validation.ok) throw new Error(validation.reason);
 
-await page.screenshot({ path: path.join(OUT, 'pitch-03-downloaded.png'), fullPage: true });
+await page.screenshot({ path: path.join(OUT, 'race-03-downloaded.png'), fullPage: true });
 await browser.close();
-
-if (upperCount <= 0) {
-  console.warn('WARNING: upper pitched selection still empty (center worked)');
-} else {
-  console.log('UPPER pitched selection OK with', upperCount, 'buildings');
-}
-console.log('PITCH SELECT OK');
+console.log('RACE FIX OK');

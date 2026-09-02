@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { MapView, type SelectionCommit } from './map/MapView';
+import { MapView } from './map/MapView';
 import { fetchBuildings } from './data/overpass';
 import { bboxAreaKm2, bboxCenter } from './geo/projection';
+import { filterBuildingsInBBox } from './geo/selection';
 import { downloadBlob, exportStl } from './export/stl';
 import type { BBox, BuildingFeature, Origin } from './types';
 import './App.css';
@@ -34,7 +35,6 @@ export default function App() {
   const [origin, setOrigin] = useState<Origin>(DEFAULT_ORIGIN);
   const [selecting, setSelecting] = useState(false);
   const [selection, setSelection] = useState<BBox | null>(null);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState('Przesuń mapę, aby wczytać budynki OSM');
@@ -47,13 +47,18 @@ export default function App() {
   const fetchTimer = useRef<number | null>(null);
   const viewBBoxRef = useRef<BBox | null>(null);
   const readyDownloadRef = useRef<ReadyDownload | null>(null);
+  const selectingRef = useRef(false);
+  const selectionRef = useRef<BBox | null>(null);
 
-  const selectedBuildings = useMemo(() => {
-    if (!selectedIds.length) return [];
-    const idSet = new Set(selectedIds);
-    return buildings.filter((b) => idSet.has(b.id));
-  }, [buildings, selectedIds]);
+  selectingRef.current = selecting;
+  selectionRef.current = selection;
 
+  // Single source of truth: always derive from current buildings ∩ selection bbox.
+  // Do NOT keep a parallel selectedIds list that can be wiped by a later OSM refresh.
+  const selectedBuildings = useMemo(
+    () => (selection ? filterBuildingsInBBox(buildings, selection) : []),
+    [buildings, selection],
+  );
   const selectedCount = selectedBuildings.length;
 
   const revokeReadyDownload = useCallback(() => {
@@ -65,6 +70,11 @@ export default function App() {
   }, []);
 
   const loadForBBox = useCallback(async (rawBBox: BBox, center?: Origin) => {
+    // Freeze OSM reloads while the user is selecting / has an export selection.
+    // A late Overpass response was wiping meshes / shifting origin and making a
+    // good selection look empty ("0 budynków") right after commit.
+    if (selectingRef.current || selectionRef.current) return;
+
     const bbox = clampBBoxAround(center ?? bboxCenter(rawBBox), rawBBox);
     const area = bboxAreaKm2(bbox);
     if (area > MAX_AREA_KM2 * 4) {
@@ -82,6 +92,8 @@ export default function App() {
     try {
       const data = await fetchBuildings(bbox, ac.signal);
       if (ac.signal.aborted) return;
+      // Re-check after await — selection may have started while Overpass was in flight.
+      if (selectingRef.current || selectionRef.current) return;
       setBuildings(data);
       setOrigin(bboxCenter(bbox));
       const withRoof = data.filter((b) => b.tags.roofShape && b.tags.roofShape !== 'flat').length;
@@ -101,6 +113,7 @@ export default function App() {
   const onMoveEnd = useCallback(
     (center: Origin, zoom: number, viewBBox: BBox) => {
       viewBBoxRef.current = viewBBox;
+      if (selectingRef.current || selectionRef.current) return;
       if (zoom < 14.5) {
         setStatus('Przybliż mapę (zoom ≥ 15), aby wczytać budynki 3D');
         return;
@@ -128,18 +141,12 @@ export default function App() {
     };
   }, [loadForBBox, revokeReadyDownload]);
 
-  // Keep selected IDs valid after a buildings refresh.
-  useEffect(() => {
-    if (!selectedIds.length) return;
-    const alive = new Set(buildings.map((b) => b.id));
-    const next = selectedIds.filter((id) => alive.has(id));
-    if (next.length !== selectedIds.length) setSelectedIds(next);
-  }, [buildings, selectedIds]);
-
   const startSelect = () => {
+    // Cancel any in-flight OSM reload so it cannot land mid-selection.
+    abortRef.current?.abort();
+    if (fetchTimer.current) window.clearTimeout(fetchTimer.current);
     setSelecting(true);
     setSelection(null);
-    setSelectedIds([]);
     revokeReadyDownload();
     setError(null);
     setStatus('Przeciągnij prostokąt na beżowych bryłach 3D');
@@ -148,38 +155,19 @@ export default function App() {
   const clearSelect = () => {
     setSelecting(false);
     setSelection(null);
-    setSelectedIds([]);
     revokeReadyDownload();
+    setError(null);
     setStatus(`Załadowano ${buildings.length} obiektów`);
   };
 
-  const commitSelection = useCallback(
-    (commit: SelectionCommit | null) => {
-      if (!commit) {
-        setSelection(null);
-        setSelectedIds([]);
-        return;
-      }
-      setSelection(commit.bbox);
-      setSelectedIds(commit.buildingIds);
-      setSelecting(false);
-      if (commit.buildingIds.length === 0) {
-        if (buildings.length === 0) {
-          setStatus('Brak wczytanych budynków OSM — kliknij Odśwież OSM');
-          setError('Najpierw wczytaj budynki 3D (Overpass), potem zaznacz ponownie.');
-        } else {
-          setStatus('Zaznaczenie bez brył 3D — spróbuj większy prostokąt na beżowych budynkach');
-          setError(null);
-        }
-      } else {
-        setError(null);
-        setStatus(
-          `Zaznaczono ${commit.buildingIds.length} budynków — ustaw skalę i pobierz STL`,
-        );
-      }
-    },
-    [buildings.length],
-  );
+  const commitSelection = useCallback((bbox: BBox | null) => {
+    setSelection(bbox);
+    if (!bbox) return;
+    setSelecting(false);
+    // Count is derived in render from buildings ∩ bbox — don't store a parallel ID list.
+    setStatus('Zaznaczenie gotowe — ustaw skalę i pobierz STL');
+    setError(null);
+  }, []);
 
   const handleExport = async () => {
     if (!selection) return;
@@ -221,7 +209,6 @@ export default function App() {
           ? `Zapisano ${count} budynków (${triangles} trójkątów) → ${filename}`
           : `Wyeksportowano ${count} budynków (${triangles} trójkątów) → ${filename}`,
       );
-      setSelecting(false);
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') {
         setStatus('Anulowano zapis pliku');
@@ -243,7 +230,6 @@ export default function App() {
         origin={origin}
         selecting={selecting}
         selection={selection}
-        selectedIds={selectedIds}
         onSelectionChange={commitSelection}
         onMoveEnd={onMoveEnd}
       />
@@ -269,10 +255,14 @@ export default function App() {
           <button
             type="button"
             className="btn ghost"
-            onClick={() =>
-              viewBBoxRef.current &&
-              void loadForBBox(viewBBoxRef.current, origin)
-            }
+            onClick={() => {
+              // Manual refresh: clear selection synchronously so loadForBBox is not blocked.
+              selectingRef.current = false;
+              selectionRef.current = null;
+              setSelecting(false);
+              setSelection(null);
+              if (viewBBoxRef.current) void loadForBBox(viewBBoxRef.current, origin);
+            }}
             disabled={loading}
           >
             {loading ? 'Wczytywanie…' : 'Odśwież OSM'}
@@ -296,7 +286,7 @@ export default function App() {
             <p className="export-warn">
               {buildings.length === 0
                 ? 'Brak wczytanych budynków OSM — kliknij Odśwież OSM, poczekaj na beżowe bryły 3D.'
-                : `Załadowano ${buildings.length} brył, ale żadna nie trafiła w prostokąt. Zaznacz większy obszar bezpośrednio na beżowych budynkach 3D (nie na szarym planie 2D).`}
+                : `Załadowano ${buildings.length} brył, ale żadna nie trafiła w prostokąt. Zaznacz większy obszar na beżowych budynkach 3D.`}
             </p>
           )}
           <label className="field">

@@ -10,10 +10,8 @@ import {
 import './setupMapLibre';
 import { createBuildingsLayer, type BuildingsLayerApi } from './buildingsLayer';
 import {
-  filterBuildingsInScreenRect,
   isMeaningfulScreenRect,
   normalizeScreenRect,
-  resolveSelectionBuildings,
   screenRectToGeoBBox,
 } from '../geo/selection';
 import type { BBox, BuildingFeature, Origin } from '../types';
@@ -47,21 +45,12 @@ function bboxToFeatureCollection(bbox: BBox) {
   };
 }
 
-export type SelectionCommit = {
-  bbox: BBox;
-  buildingIds: string[];
-};
-
 export type MapViewProps = {
   buildings: BuildingFeature[];
   origin: Origin;
   selecting: boolean;
   selection: BBox | null;
-  selectedIds?: string[];
-  /** Live preview while dragging; does not commit the export selection. */
-  onSelectionDraft?: (bbox: BBox | null) => void;
-  /** Fired on mouseup when a selection rectangle is committed. */
-  onSelectionChange: (commit: SelectionCommit | null) => void;
+  onSelectionChange: (bbox: BBox | null) => void;
   onMoveEnd: (center: Origin, zoom: number, viewBBox: BBox) => void;
 };
 
@@ -85,8 +74,6 @@ export function MapView({
   origin,
   selecting,
   selection,
-  selectedIds = [],
-  onSelectionDraft,
   onSelectionChange,
   onMoveEnd,
 }: MapViewProps) {
@@ -101,7 +88,6 @@ export function MapView({
   const draftBBoxRef = useRef<BBox | null>(null);
   const selectingRef = useRef(selecting);
   const onSelectionChangeRef = useRef(onSelectionChange);
-  const onSelectionDraftRef = useRef(onSelectionDraft);
   const onMoveEndRef = useRef(onMoveEnd);
   const buildingsRef = useRef(buildings);
   const originRef = useRef(origin);
@@ -110,7 +96,6 @@ export function MapView({
 
   selectingRef.current = selecting;
   onSelectionChangeRef.current = onSelectionChange;
-  onSelectionDraftRef.current = onSelectionDraft;
   onMoveEndRef.current = onMoveEnd;
   buildingsRef.current = buildings;
   originRef.current = origin;
@@ -154,7 +139,6 @@ export function MapView({
       draftBBoxRef.current = bbox;
       layer.setSelectionBBox(bbox);
       setOverlay(bbox);
-      onSelectionDraftRef.current?.(bbox);
     };
 
     let boot = 0;
@@ -241,26 +225,12 @@ export function MapView({
       draftBBoxRef.current = null;
 
       if (rect && bbox && isMeaningfulScreenRect(rect)) {
-        const screenHits = filterBuildingsInScreenRect(
-          buildingsRef.current,
-          rect,
-          (lng, lat) => {
-            const p = map.project([lng, lat]);
-            return { x: p.x, y: p.y };
-          },
-        );
-        const selected = resolveSelectionBuildings(buildingsRef.current, bbox, screenHits);
         layer.setSelectionBBox(bbox);
-        layer.setSelectedIds(selected.map((b) => b.id));
         setOverlay(bbox);
-        onSelectionChangeRef.current({
-          bbox,
-          buildingIds: selected.map((b) => b.id),
-        });
+        onSelectionChangeRef.current(bbox);
       } else {
         layer.setSelectionBBox(selectionRef.current);
         setOverlay(selectionRef.current);
-        onSelectionDraftRef.current?.(null);
       }
     };
 
@@ -291,10 +261,8 @@ export function MapView({
   useEffect(() => {
     if (!mapReadyRef.current) return;
     layerRef.current?.setSelectionBBox(selection);
-    // Restore screen-resolved IDs after geo bbox recompute inside setSelectionBBox.
-    if (selectedIds.length) layerRef.current?.setSelectedIds(selectedIds);
     setOverlayRef.current(selection);
-  }, [selection, selectedIds]);
+  }, [selection]);
 
   useEffect(() => {
     const canvas = mapRef.current?.getCanvas();
